@@ -10,7 +10,7 @@
 
 int main(void) {
     int res = 0;
-    int msqid = alloc_message_queue();
+    int msqid = get_message_queue();
     struct message msg;
 
     msg.type = 1;

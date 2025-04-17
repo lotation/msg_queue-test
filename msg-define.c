@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <stdio.h>
 #include <sys/ipc.h>
 #include <sys/types.h>
@@ -11,46 +12,41 @@ unsigned long simple_hash(const char *str)
     int c;
     
     while ((c = *str++)) {
-        hash = ((hash << 5) + hash) + c;  // hash * 33 + c
+        hash = ((hash << 5) + hash) + c;
     }
 
     return hash;
 }
 
-key_t generate_unique_key(void)
+key_t get_msq_key(void)
 {
-    char process_name[MAX_PROCESS_NAME];
+    char str[MAX_TEXT_LEN];
     FILE *fp;
 
-    // Read the process name from /proc/self/comm (Linux-specific)
+    // Can also read the process name from /proc/self/comm if used in only one process
     fp = fopen("/etc/hostname", "r");
     if (fp == NULL) {
         perror("Error opening /etc/hostname");
         exit(1);
     }
     
-    // Get the process name
-    fgets(process_name, MAX_PROCESS_NAME, fp);
+    // Get system hostname
+    fgets(str, MAX_TEXT_LEN, fp);
     fclose(fp);
 
     // Remove the newline character that fgets() may add
-    process_name[strcspn(process_name, "\n")] = 0;
-
-    // printf("process_name => %s\n", process_name);
+    str[strcspn(str, "\n")] = 0;
 
     // Generate a simple hash
-    unsigned long hash_value = simple_hash(process_name);
+    unsigned long hash_value = simple_hash(str);
 
-    // printf("hash_value => %lu\n", hash_value);
-    
     // Ensure the key is positive
     if (hash_value <= 0) {
-        hash_value = -hash_value;  // Make it positive if negative
+        hash_value = -hash_value;
     }
 
-    // Limit the key to fit within the key_t range (32-bit signed integer)
-    key_t key = (key_t)(hash_value & 0x7FFFFFFF);  // Ensure it's a valid positive key
-    // key_t key = (key_t)(hash_value);
+    // Limit the key to fit within the key_t range == 32-bit signed integer
+    key_t key = (key_t)(hash_value); //( & 0x7FFFFFFF);
 
     return key;
 }
@@ -58,10 +54,7 @@ key_t generate_unique_key(void)
 int alloc_message_queue(void)
 {
     int msqid;
-    // Generate a unique key using the process name and PID
-    key_t key = generate_unique_key();
-
-    // printf("key => %d\n", key);
+    key_t key = get_msq_key();
 
     msqid = msgget(key, IPC_CREAT | S_IRUSR | S_IWUSR | IPC_EXCL | IPC_NOWAIT) ;
 
@@ -70,35 +63,37 @@ int alloc_message_queue(void)
         exit(EXIT_FAILURE);
     }
 
-    // printf("Message queue created successfully!\n");
-
     return msqid;
 }
 
 int get_message_queue(void)
 {
     int msqid;
-    // Generate a unique key using the process name and PID
-    key_t key = generate_unique_key();
+    key_t key = get_msq_key();
 
-    msqid = msgget(key, S_IRUSR | S_IWUSR) ;
+    msqid = msgget(key, IPC_CREAT | IPC_EXCL | IPC_NOWAIT | S_IRUSR | S_IWUSR);
 
     if (msqid == -1) {
-        perror("msgget failed: ");
-        exit(EXIT_FAILURE);
+        if (errno == EEXIST) {
+            // Message queue already exists so just retrieve the ID
+            msqid = msgget(key, S_IRUSR | S_IWUSR);
+            if (msqid == -1) {
+                perror("msgget failed: ");
+                exit(EXIT_FAILURE);
+            }
+        } else {
+            perror("msgget failed: ");
+            exit(EXIT_FAILURE);
+        }
     }
-
-    // printf("Message queue setup successfully!\n");
 
     return msqid;
 }
 
 void remove_message_queue(int msqid)
 {
-    if(msgctl(msqid, IPC_RMID, NULL) == -1) {
+    if (msgctl(msqid, IPC_RMID, NULL) == -1) {
         perror("msgget failed: ");
         exit(EXIT_FAILURE);
-    } else {
-        // printf("Message queue removed successfully!\n");
     }
 }
